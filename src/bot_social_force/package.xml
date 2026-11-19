@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>bot_social_force</name>
+  <version>0.1.0</version>
+  <description>Header library for social force and group navigation models.</description>
+  <maintainer email="cuoikihri@example.com">CuoiKiHRI</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

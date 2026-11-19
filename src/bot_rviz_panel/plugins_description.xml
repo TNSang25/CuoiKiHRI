@@ -1,0 +1,21 @@
+<library path="bot_rviz_panel">
+  
+  <class name="bot_rviz_panel/BotGoals"
+         type="bot_rviz_panel::GoalTool"
+         base_class_type="rviz_common::Tool">
+    <description>The Bot Simulation rviz tool</description>
+  </class>
+  
+  <class name="bot_rviz_panel/BotPanel"
+         type="bot_rviz_panel::ActorPanel"
+         base_class_type="rviz_common::Panel">
+    <description>The Bot Simulation rviz panel.</description>
+  </class>
+
+  <class name="bot_rviz_panel/BotMetricsPanel"
+         type="bot_rviz_panel::MetricsPanel"
+         base_class_type="rviz_common::Panel">
+    <description>The Bot Simulation rviz metrics panel.</description>
+  </class>
+
+</library>

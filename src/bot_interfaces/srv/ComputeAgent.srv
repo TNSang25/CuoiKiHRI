@@ -1,0 +1,5 @@
+# agent
+int32 id 
+#builtin_interfaces/Time stamp
+---
+bot_interfaces/Agent updated_agent
