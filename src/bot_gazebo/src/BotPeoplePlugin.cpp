@@ -24,8 +24,12 @@
 // #include <ignition/math.hh>
 // #include <ignition/math/gzmath.hh>
 #include <bot_gazebo/BotPeoplePlugin.h>
-
-#define DEF_WALKING_ANIMATION "walking"
+#include <bot_gazebo/actor_motion.hpp>
+#include <bot_gazebo/gait_orientation.hpp>
+#include <gazebo/common/Mesh.hh>
+#include <gazebo/common/Skeleton.hh>
+#include <gazebo/common/SkeletonAnimation.hh>
+#include <unordered_map>
 
 // namespace gazebo_ros {
 namespace bot
@@ -46,6 +50,11 @@ public:
 
   /// \brief Helper function to collect the pedestrians data from Gazebo
   bool GetPedestrians();
+  void SetAnimation(const gazebo::physics::ActorPtr &actor, int id,
+                    bool walking, double distance);
+  double WalkingTimePerMeter(const gazebo::physics::ActorPtr &actor);
+  ignition::math::Quaterniond AnimatedOrientation(
+    const gazebo::physics::ActorPtr &actor, double navigation_heading);
   /// \brief Helper function to collect the robot data from Gazebo
   bool GetRobot();
   /// \brief Helper function to collect obtacles from Gazebo
@@ -100,6 +109,9 @@ public:
 
   /// \brief vector of pedestrians detected.
   std::vector<bot_interfaces::msg::Agent> pedestrians;
+  std::unordered_map<int, double> walkingTimePerMeter;
+  // Navigation heading is separate from the pelvis rotation in the gait clip.
+  std::unordered_map<int, double> navigationHeading;
   // init state of agents
   bot_interfaces::msg::Agents init_pedestrians;
 
@@ -243,40 +255,13 @@ void BotPeoplePlugin::Load(gazebo::physics::WorldPtr _world, sdf::ElementPtr _sd
 
   hnav_->lastUpdate = _world->SimTime();
 
-  // Reset trajectory so we can move the agents!
-  for (size_t i = 0; i < hnav_->pedestrians.size(); ++i)
+  for (const auto &agent : hnav_->pedestrians)
   {
-    gazebo::physics::ModelPtr model = hnav_->world->ModelByName(hnav_->pedestrians[i].name);
-    gazebo::physics::ActorPtr actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(model);
-
-    gazebo::physics::TrajectoryInfoPtr trajectoryInfo;
-    trajectoryInfo.reset(new gazebo::physics::TrajectoryInfo());
-    trajectoryInfo->id = 0;
-    auto skelAnims = actor->SkeletonAnimations();
-    if (!skelAnims.empty())
-    {
-      for (auto it = skelAnims.begin(); it != skelAnims.end(); ++it)
-      {
-        RCLCPP_INFO(hnav_->rosnode->get_logger(), "Agent %s has animation: %s", actor->GetName().c_str(),
-                    it->first.c_str());
-      }
-      trajectoryInfo->type = "no_active";  // skelAnims.begin()->first;
-    }
-    else
-    {
-      RCLCPP_INFO(hnav_->rosnode->get_logger(), "Animation default type: %s", DEF_WALKING_ANIMATION);
-      trajectoryInfo->type = DEF_WALKING_ANIMATION;
-    }
-    trajectoryInfo->duration = 1.0;
-
-    /// \brief Set a custom trajectory for the actor, using one of the
-    /// existing animations. This will override any trajectories previously
-    /// defined. When a custom trajectory is defined, the script time must
-    /// be set with `SetScriptTime` in order to play the animation.
-    /// \param[in] _trajInfo Information about custom trajectory.
-    /// \sa ResetCustomTrajectory, SetScriptTime
-    /// public: void SetCustomTrajectory(TrajectoryInfoPtr &_trajInfo);
-    actor->SetCustomTrajectory(trajectoryInfo);
+    auto actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(
+      hnav_->world->ModelByName(agent.name));
+    hnav_->walkingTimePerMeter[agent.id] = hnav_->WalkingTimePerMeter(actor);
+    hnav_->navigationHeading[agent.id] = agent.yaw;
+    hnav_->SetAnimation(actor, agent.id, false, 0.0);
   }
 
   // Reset();
@@ -303,52 +288,28 @@ void BotPeoplePlugin::Load(gazebo::physics::WorldPtr _world, sdf::ElementPtr _sd
 
 void BotPeoplePlugin::Reset()
 {
-  RCLCPP_INFO(hnav_->rosnode->get_logger(), "\n\n---------World reset---------\n");
-
   hnav_->reset = true;
-  hnav_->lastUpdate = 0.0;  // hnav_->world->SimTime();
+  hnav_->lastUpdate = hnav_->world->SimTime();
   hnav_->rostime = hnav_->rosnode->get_clock()->now();
-
   hnav_->InitializeRobot();
-
-  for (size_t i = 0; i < hnav_->init_pedestrians.agents.size(); ++i)
+  hnav_->pedestrians = hnav_->init_pedestrians.agents;
+  for (auto &agent : hnav_->pedestrians)
   {
-    gazebo::physics::ModelPtr model = hnav_->world->ModelByName(hnav_->init_pedestrians.agents[i].name);
-    gazebo::physics::ActorPtr actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(model);
-
-    // // Gazebo models positions----------------
-    // ignition::math::Pose3d actorPose = actor->WorldPose();
-    // double yaw =
-    //     hnav_->normalizeAngle(hnav_->init_pedestrians.agents[i].yaw +
-    //     M_PI_2);
-    // auto entity_lin_vel = gazebo_ros::Convert<ignition::math::Vector3d>(
-    //     hnav_->init_pedestrians.agents[i].velocity.linear);
-    // auto entity_ang_vel = gazebo_ros::Convert<ignition::math::Vector3d>(
-    //     hnav_->init_pedestrians.agents[i].velocity.angular);
-    // actorPose.Pos().X(hnav_->init_pedestrians.agents[i].position.position.x);
-    // actorPose.Pos().Y(hnav_->init_pedestrians.agents[i].position.position.y);
-    // actorPose.Rot() = ignition::math::Quaterniond(1.5707, 0, yaw);
-    // model->SetWorldPose(actorPose);
-    // model->ResetPhysicsStates();
-    // //----------------------------------------
-
-    //---Reset trajectories-----------------------------
-    gazebo::physics::TrajectoryInfoPtr trajectoryInfo;
-    trajectoryInfo.reset(new gazebo::physics::TrajectoryInfo());
-    // trajectoryInfo->id = 0;
-    auto skelAnims = actor->SkeletonAnimations();
-    if (!skelAnims.empty())
-    {
-      trajectoryInfo->type = "no_active";
-    }
-    else
-    {
-      RCLCPP_INFO(hnav_->rosnode->get_logger(), "Animation default type: %s", DEF_WALKING_ANIMATION);
-      trajectoryInfo->type = DEF_WALKING_ANIMATION;
-    }
-    trajectoryInfo->duration = 1.0;
-
-    actor->SetCustomTrajectory(trajectoryInfo);
+    auto actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(
+      hnav_->world->ModelByName(agent.name));
+    if (!actor) continue;
+    actor->SetWorldPose(ignition::math::Pose3d(
+      agent.position.position.x, agent.position.position.y, actorHeight(agent.skin),
+      kActorRoll, 0.0, agent.yaw + kActorYawOffset), false, false);
+    agent.velocity = geometry_msgs::msg::Twist();
+    agent.linear_vel = 0.0;
+    agent.angular_vel = 0.0;
+    actor->ResetCustomTrajectory();
+    hnav_->navigationHeading[agent.id] = agent.yaw;
+    hnav_->SetAnimation(actor, agent.id, false, 0.0);
+    auto pose = actor->WorldPose();
+    pose.Rot() = hnav_->AnimatedOrientation(actor, agent.yaw);
+    actor->SetWorldPose(pose, false, false);
   }
 }
 
@@ -441,12 +402,13 @@ void BotPeoplePluginPrivate::InitializeAgents()
       gazebo::physics::ActorPtr actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(model);
 
       ignition::math::Pose3d actorPose = actor->WorldPose();
-      double yaw = normalizeAngle(agent.yaw + M_PI_2);
+      double yaw = normalizeAngle(agent.yaw + kActorYawOffset);
       auto entity_lin_vel = gazebo_ros::Convert<ignition::math::Vector3d>(agent.velocity.linear);
       auto entity_ang_vel = gazebo_ros::Convert<ignition::math::Vector3d>(agent.velocity.angular);
       actorPose.Pos().X(agent.position.position.x);
       actorPose.Pos().Y(agent.position.position.y);
-      actorPose.Rot() = ignition::math::Quaterniond(1.5707, 0, yaw);
+      actorPose.Pos().Z(actorHeight(agent.skin));
+      actorPose.Rot() = ignition::math::Quaterniond(kActorRoll, 0, yaw);
       model->SetWorldPose(actorPose);
       if (useCollision)
       {
@@ -459,7 +421,7 @@ void BotPeoplePluginPrivate::InitializeAgents()
       ignition::math::Vector3d pos = model->WorldPose().Pos();
       // The front (x axis) of the actors in Gazebo is
       // looking to the person left, we rotate it
-      yaw = normalizeAngle(model->WorldPose().Rot().Yaw() - M_PI_2);
+      yaw = normalizeAngle(model->WorldPose().Rot().Yaw() - kActorYawOffset);
       ag.position.position.x = pos.X();
       ag.position.position.y = pos.Y();
       tf2::Quaternion myQuaternion;
@@ -806,332 +768,141 @@ bool BotPeoplePluginPrivate::GetRobot()
 /////////////////////////////////////////////////
 bool BotPeoplePluginPrivate::GetPedestrians()
 {
-  for (unsigned int i = 0; i < pedestrians.size(); ++i)
+  const double elapsed = dt > 1e-9 ? dt : update_rate_secs;
+  if (elapsed <= 0.0) return false;
+  for (auto &agent : pedestrians)
   {
-    gazebo::physics::ModelPtr model = world->ModelByName(pedestrians[i].name);
-
+    auto model = world->ModelByName(agent.name);
     if (!model)
     {
-      RCLCPP_ERROR(rosnode->get_logger(), "Pedestrian model %s not found!!!!", pedestrians[i].name.c_str());
+      RCLCPP_ERROR(rosnode->get_logger(), "Pedestrian model %s not found", agent.name.c_str());
       return false;
     }
-
-    double yaw = normalizeAngle(model->WorldPose().Rot().Yaw() - M_PI_2);
-    ignition::math::Vector3d pos = model->WorldPose().Pos();
-
-    // Velocities
-    // ignition::math::Vector3d linvel = model->WorldLinearVel();
-    // pedestrians[i].velocity.linear.x = linvel.X();
-    // pedestrians[i].velocity.linear.y = linvel.Y();
-    // pedestrians[i].linear_vel = linvel.Length();
-    // ignition::math::Vector3d angvel = model->WorldAngularVel();
-    // pedestrians[i].velocity.angular.z = angvel.Z();
-    // pedestrians[i].angular_vel = angvel.Z();
-
-    // I do not know the reason, but Gazebo WorldVels are throwing zero
-    // velocities, so I compute them by myself
-    double xi = pedestrians[i].position.position.x;
-    double yi = pedestrians[i].position.position.y;
-    double xf = pos.X();
-    double yf = pos.Y();
-    double dist = sqrt((xf - xi) * (xf - xi) + (yf - yi) * (yf - yi));
-    double linearVelocity = dist / (update_rate_secs);
-    double anvel = normalizeAngle(yaw - pedestrians[i].yaw) / (update_rate_secs);
-    double vx = (xf - xi) / (update_rate_secs);
-    double vy = (yf - yi) / (update_rate_secs);
-
-    if (reset)
-    {
-      linearVelocity = 0.0;
-      vx = 0.0;
-      vy = 0.0;
-      anvel = 0.0;
-    }
-    else if (linearVelocity > pedestrians[i].desired_velocity)
-    {
-      linearVelocity = pedestrians[i].desired_velocity;
-      double maxd = linearVelocity * update_rate_secs;
-      if (fabs(xf - xi) > maxd)
-        vx = ((xf - xi) / fabs(xf - xi)) * maxd / update_rate_secs;
-      if (fabs(yf - yi) > maxd)
-        vy = ((yf - yi) / fabs(yf - yi)) * maxd / update_rate_secs;
-    }
-    pedestrians[i].velocity.linear.x = vx;
-    pedestrians[i].velocity.linear.y = vy;
-    pedestrians[i].linear_vel = linearVelocity;
-    pedestrians[i].velocity.angular.z = anvel;
-    pedestrians[i].angular_vel = anvel;
-
-    // Pose
-    pedestrians[i].position.position.x = xf;  // pos.X();
-    pedestrians[i].position.position.y = yf;  // pos.Y();
-    tf2::Quaternion myQuaternion;
-    myQuaternion.setRPY(0, 0, yaw);
-    pedestrians[i].position.orientation = tf2::toMsg(myQuaternion);
-    pedestrians[i].yaw = yaw;
-
-    // RCLCPP_INFO(rosnode->get_logger(),
-    //             "getPedestrians. Actor %s pose x: %.2f, y: %.2f, vx:%.2f, "
-    //             "vy:%.2f, lv: %.2f, dvel: %.2f",
-    //             pedestrians[i].name.c_str(),
-    //             pedestrians[i].position.position.x,
-    //             pedestrians[i].position.position.y,
-    //             pedestrians[i].velocity.linear.x,
-    //             pedestrians[i].velocity.linear.y, pedestrians[i].linear_vel,
-    //             pedestrians[i].desired_velocity);
-
-    // if (pedestrians[i].name == "actor2") { //// (dt * step_count),
-    //   RCLCPP_INFO(rosnode->get_logger(),
-    //               "%s xf:%.3f, xi:%.3f, yf:%.3f, yi:%.3f\ncomputed lv: %
-    //               .3f " "av: % .3f, vx: % .3f, vy: % .3f ",
-    //               pedestrians[i].name.c_str(), xf, xi, yf, yi,
-    //               pedestrians[i].linear_vel, pedestrians[i].angular_vel,
-    //               pedestrians[i].velocity.linear.x,
-    //               pedestrians[i].velocity.linear.y);
-    // }
-
-    // RCLCPP_INFO(rosnode->get_logger(),
-    //             "GetPedestrians. Agent: %s from simulator, type: %i, id:%i,
-    //             " "x:%.2f, y: % .2f, th: % .2f, lv: % .3f, av: % .3f ",
-    //             model->GetName().c_str(), model->GetType(), model->GetId(),
-    //             pos.X(), pos.Y(), yaw, pedestrians[i].linear_vel,
-    //             pedestrians[i].angular_vel);
+    const auto pose = model->WorldPose();
+    const auto heading = navigationHeading.find(agent.id);
+    const double yaw = heading != navigationHeading.end() ? heading->second :
+      normalizeAngle(pose.Rot().Yaw() - kActorYawOffset);
+    const double vx = reset ? 0.0 : (pose.Pos().X() - agent.position.position.x) / elapsed;
+    const double vy = reset ? 0.0 : (pose.Pos().Y() - agent.position.position.y) / elapsed;
+    agent.velocity.linear.x = vx;
+    agent.velocity.linear.y = vy;
+    agent.linear_vel = std::hypot(vx, vy);
+    agent.angular_vel = reset ? 0.0 : normalizeAngle(yaw - agent.yaw) / elapsed;
+    agent.velocity.angular.z = agent.angular_vel;
+    agent.position.position.x = pose.Pos().X();
+    agent.position.position.y = pose.Pos().Y();
+    agent.yaw = yaw;
+    tf2::Quaternion orientation;
+    orientation.setRPY(0, 0, yaw);
+    agent.position.orientation = tf2::toMsg(orientation);
   }
   reset = false;
   return true;
 }
 
-/////////////////////////////////////////////////
-void BotPeoplePluginPrivate::UpdateGazeboPedestrians(const gazebo::common::UpdateInfo& _info,
-                                                 const bot_interfaces::msg::Agents& _agents)
+// Custom Gazebo trajectories consume animation seconds, even when interpolate_x
+// is true. Derive seconds/metre from the clip's native root motion instead of
+// assuming one metre of travel equals one second of animation.
+double BotPeoplePluginPrivate::WalkingTimePerMeter(const gazebo::physics::ActorPtr &actor)
 {
-  if (goalReceived == false)
+  const auto &animations = actor->SkeletonAnimations();
+  const auto clip = animations.find("walking");
+  if (clip == animations.end() || !actor->Mesh() || !actor->Mesh()->GetSkeleton())
+    return 4.5;
+  auto *animation = clip->second;
+  const double duration = animation->GetLength();
+  const auto root = actor->Mesh()->GetSkeleton()->GetRootNode()->GetName();
+  const auto first = animation->NodePoseAt(root, 0.0, false).Translation();
+  const auto last = animation->NodePoseAt(root, duration, false).Translation();
+  const double distance = std::hypot(last.X() - first.X(), last.Y() - first.Y());
+  const double factor = distance > 0.01 ? duration / distance : 4.5;
+  RCLCPP_INFO(rosnode->get_logger(), "%s walking cadence: %.3f animation seconds/metre",
+              actor->GetName().c_str(), factor);
+  return factor;
+}
+
+void BotPeoplePluginPrivate::SetAnimation(const gazebo::physics::ActorPtr &actor,
+                                         int id, bool walking, double distance)
+{
+  const std::string clip = walking ? "walking" : "idle";
+  const auto animation = actor->SkeletonAnimations().find(clip);
+  if (animation == actor->SkeletonAnimations().end())
   {
-    counter++;
-    if (counter == 1000) {
-      RCLCPP_INFO(rosnode->get_logger(), "BotPeoplePlugin. Waiting to receive the robot navigation goal...");
-      counter = 0;
-    }
+    RCLCPP_WARN_ONCE(rosnode->get_logger(), "Missing walking/idle clips; regenerate the world");
     return;
   }
-
-  // update the Gazebo actors
-  for (auto a : _agents.agents)
+  const auto current = actor->CustomTrajectory();
+  if (!current || current->type != clip)
   {
-    // auto model =
-    // boost::dynamic_pointer_cast<gazebo::physics::Model>(entity);
-    gazebo::physics::ModelPtr model = world->ModelByName(a.name);
-    gazebo::physics::ActorPtr actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(model);
+    gazebo::physics::TrajectoryInfoPtr trajectory(new gazebo::physics::TrajectoryInfo());
+    trajectory->id = id;
+    trajectory->type = clip;
+    trajectory->duration = animation->second->GetLength();
+    trajectory->translated = false;
+    actor->SetCustomTrajectory(trajectory);
+    actor->SetScriptTime(0.0);
+    actor->Play();
+  }
+  const auto factor = walkingTimePerMeter.find(id);
+  const double cadence = factor == walkingTimePerMeter.end() ? 4.5 : factor->second;
+  actor->SetScriptTime(walking ? actor->ScriptTime() + distance * cadence : 0.0);
+}
 
-    ignition::math::Pose3d actorPose = actor->WorldPose();
-    double yaw = normalizeAngle(a.yaw + M_PI_2);
-    double currAngle = actorPose.Rot().Yaw();
-    double diff = normalizeAngle(yaw - currAngle);
-    if (std::fabs(diff) > IGN_DTOR(10))
+// Gazebo's custom-trajectory path replaces the animated root rotation with the
+// actor's world rotation. Preserve the clip's pelvis rotation here; otherwise
+// the spine's compensating roll plays against a rigid pelvis and rocks the torso.
+ignition::math::Quaterniond BotPeoplePluginPrivate::AnimatedOrientation(
+  const gazebo::physics::ActorPtr &actor, double navigation_heading)
+{
+  const auto trajectory = actor->CustomTrajectory();
+  if (trajectory && actor->Mesh() && actor->Mesh()->GetSkeleton())
+  {
+    const auto clip = actor->SkeletonAnimations().find(trajectory->type);
+    if (clip != actor->SkeletonAnimations().end())
     {
-      yaw = normalizeAngle(currAngle + (diff * 0.01));  // ok: 01,  tested: 0.01, 0.005
+      const auto root = actor->Mesh()->GetSkeleton()->GetRootNode()->GetName();
+      const auto pelvis = clip->second->NodePoseAt(root, actor->ScriptTime()).Rotation();
+      return gaitOrientation(navigation_heading, pelvis);
     }
+  }
+  return ignition::math::Quaterniond(kActorRoll, 0.0, navigation_heading + kActorYawOffset);
+}
 
-    auto entity_lin_vel = gazebo_ros::Convert<ignition::math::Vector3d>(a.velocity.linear);
-    auto entity_ang_vel = gazebo_ros::Convert<ignition::math::Vector3d>(a.velocity.angular);
-    // RCLCPP_INFO(rosnode->get_logger(), "linvel: x:%.3f, y:%.3f - angvel
-    // z:%.3f",
-    //             entity_lin_vel.X(), entity_lin_vel.Y(),
-    //             entity_ang_vel.Z());
-
-    actorPose.Pos().X(a.position.position.x);
-    actorPose.Pos().Y(a.position.position.y);
-    actorPose.Rot() = ignition::math::Quaterniond(1.5707, 0, yaw);
-
-    // The human agents do not have collisions.
-    // When the simulation starts, they move to zero height
-    // (in the middle of their bodies approximately)
-    // So, we need to add an extra height (Z) according to the height
-    // of each model in order to put them on the floor
-    // (the floor must be at zero height)
-    for (auto pedestrian : pedestrians)
-    {
-      if (a.id == pedestrian.id)
-      {
-        switch (pedestrian.skin)
-        {
-          // Elegant man
-          case 0:
-            actorPose.Pos().Z(0.96);
-            break;
-          // Casual man
-          case 1:
-            actorPose.Pos().Z(0.97);
-            break;
-          // Elegant woman
-          case 2:
-            actorPose.Pos().Z(0.93);
-            break;
-          // Regular man
-          case 3:
-            actorPose.Pos().Z(0.93);
-            break;
-          // Worker man
-          case 4:
-            actorPose.Pos().Z(0.97);
-            break;
-          // Balds
-          case 5:
-            actorPose.Pos().Z(1.05);
-            break;
-          case 6:
-            actorPose.Pos().Z(1.05);
-            break;
-          case 7:
-            actorPose.Pos().Z(1.05);
-            break;
-          case 8:
-            actorPose.Pos().Z(1.05);
-            break;
-          default:
-            break;
-        }
-      }
-    }
-
-    // Distance traveled is used to coordinate motion with the walking
-    // animation: newPose(actorPose) - prevPose(actor->WorldPose)
-    double distanceTraveled = (actorPose.Pos() - actor->WorldPose().Pos()).Length();
-
-    // RCLCPP_INFO(rosnode->get_logger(),
-    //             "UpdateGazeboPeds updating... actor id:%i, pose x:%.2f, "
-    //             "y:%.2f, th:%.2f",
-    //             actor->GetId(), actorPose.Pos().X(), actorPose.Pos().Y(),
-    //             actorPose.Rot().Euler().Z());
-    bool is_paused = world->IsPaused();
-    world->SetPaused(true);
-    model->SetWorldPose(actorPose);  //, true, true); // false, false);
+void BotPeoplePluginPrivate::UpdateGazeboPedestrians(const gazebo::common::UpdateInfo&,
+                                                   const bot_interfaces::msg::Agents& agents)
+{
+  if (!goalReceived) return;
+  for (const auto &agent : agents.agents)
+  {
+    auto actor = boost::dynamic_pointer_cast<gazebo::physics::Actor>(world->ModelByName(agent.name));
+    if (!actor) continue;
+    const auto previous = actor->WorldPose();
+    const double dx = agent.position.position.x - previous.Pos().X();
+    const double dy = agent.position.position.y - previous.Pos().Y();
+    const double distance = std::hypot(dx, dy);
+    const bool walking = dt > 0.0 && distance / dt > 0.02;
+    // Face the displacement actually applied in this same frame. A separate
+    // 1%-per-frame yaw filter lets the body slide sideways around turns.
+    const double heading = walking ? movementHeading(dx, dy, agent.yaw) : agent.yaw;
+    navigationHeading[agent.id] = heading;
+    SetAnimation(actor, agent.id, walking, distance);
+    const ignition::math::Pose3d pose(
+      ignition::math::Vector3d(agent.position.position.x, agent.position.position.y, actorHeight(agent.skin)),
+      AnimatedOrientation(actor, heading));
+    actor->SetWorldPose(pose, false, false);
     if (useCollision)
     {
-      gazebo::physics::ModelPtr body_model = world->ModelByName(a.name + "_body");
-      actorPose.Rot() = ignition::math::Quaterniond(0,0, yaw);
-      body_model->SetWorldPose(actorPose);  //, true, true); // false, false);
+      auto body = world->ModelByName(agent.name + "_body");
+      if (body) body->SetWorldPose(ignition::math::Pose3d(pose.Pos(),
+        ignition::math::Quaterniond(0.0, 0.0, heading)), false, false);
     }
-    world->SetPaused(is_paused);
-
-    // actor->SetLinearVel(entity_lin_vel);
-    // actor->SetAngularVel(entity_ang_vel);
-    // RCLCPP_INFO(
-    //     rosnode->get_logger(),
-    //     "UpdateGazeboPeds updated.. actor id:%i, pose x:%.2f, y:%.2f,
-    //     th:%.2f", actor->GetId(), actor->WorldPose().Pos().X(),
-    //     actor->WorldPose().Pos().Y(),
-    //     actor->WorldPose().Rot().Euler().Z());
-
-    int index = -1;
-    for (unsigned int i = 0; i < pedestrians.size(); i++)
+    for (auto &state : pedestrians)
     {
-      if (a.id == pedestrians[i].id)
-      {
-        // desiredVel
-        // this->pedestrians[i].desired_velocity = a.desired_velocity;
-        // update pedestrians' goals
-        this->pedestrians[i].goals.clear();
-        this->pedestrians[i].goals = a.goals;
-
-        // update behavior state
-        if (a.behavior.state != this->pedestrians[i].behavior.state)
-        {
-          this->pedestrians[i].behavior.state = a.behavior.state;
-          index = i;
-          break;
-        }
-      }
+      if (state.id != agent.id) continue;
+      state.goals = agent.goals;
+      state.behavior = agent.behavior;
+      break;
     }
-
-    // TODO: select better animations for each behavior
-    // and adjust the animationFactor value for each case
-    double animationFactor;
-
-    if (a.behavior.state == bot_interfaces::msg::AgentBehavior::BEH_NO_ACTIVE)
-    {
-      if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_REGULAR ||
-          a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SURPRISED ||
-          a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_THREATENING)
-      {
-        animationFactor = 1.0;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_IMPASSIVE)
-      {
-        animationFactor = 1.0;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SCARED)
-      {
-        animationFactor = 1.0;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_CURIOUS)
-      {
-        animationFactor = 1.0;
-      }
-      else
-      {
-        animationFactor = 1.0;
-      }
-    }
-    else
-    {
-      if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_REGULAR)
-      {
-        animationFactor = 1.5;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_IMPASSIVE)
-      {
-        animationFactor = 1.5;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SURPRISED)
-      {
-        animationFactor = 1.0;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_THREATENING)
-      {
-        animationFactor = 1.0;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SCARED)
-      {
-        animationFactor = 1.5;
-      }
-      else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_CURIOUS)
-      {
-        animationFactor = 1.0;
-      }
-      else
-      {
-        animationFactor = 1.0;
-      }
-    }
-
-    // change the animation
-    if (index > -1)
-    {
-      gazebo::physics::TrajectoryInfoPtr trajectoryInfo;
-      trajectoryInfo.reset(new gazebo::physics::TrajectoryInfo());
-      trajectoryInfo->id = a.id;
-      trajectoryInfo->duration = 1.0;
-      if (a.behavior.state == bot_interfaces::msg::AgentBehavior::BEH_NO_ACTIVE)
-      {
-        trajectoryInfo->type = "no_active";
-        // RCLCPP_INFO(rosnode->get_logger(),
-        //            "changing behavior %i of %s to 'no_active'",
-        //            (int)a.behavior, actor->GetName().c_str());
-      }
-      else
-      {
-        trajectoryInfo->type = "active";
-        // RCLCPP_INFO(rosnode->get_logger(),
-        //            "changing behavior %i of %s to 'active'",
-        //            (int)a.behavior, actor->GetName().c_str());
-      }
-      actor->Stop();
-      actor->SetCustomTrajectory(trajectoryInfo);
-      actor->Play();
-    }
-    actor->SetScriptTime(actor->ScriptTime() + (distanceTraveled * animationFactor));
-    // lastUpdate = _info.simTime;
   }
 }
 
@@ -1149,6 +920,7 @@ void BotPeoplePluginPrivate::OnUpdate(const gazebo::common::UpdateInfo& _info)
 
   if (seconds_since_last_update < update_rate_secs)
     return;
+  dt = seconds_since_last_update;
   // // update_rate_secs = 0.1;
   // if (seconds_since_last_update < update_rate_secs) {
   //   // get pedestrian states (fill pedestrians)

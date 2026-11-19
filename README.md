@@ -105,7 +105,8 @@ ros2 topic list --no-daemon
 ```
 
 Phép kiểm tra xác nhận có `/clock`, `/human_states`, `/robot_states` và cả 3
-người đổi vị trí hơn 0,1 m trong khoảng 10 giây. Kết quả:
+người đổi vị trí hơn 0,1 m trong khoảng 10 giây, đồng thời hướng thân khớp
+hướng dịch chuyển (sai lệch ở phân vị 95 dưới 5 độ). Kết quả:
 `.runtime/smoke-test.json`. Dùng `--agents` để kiểm tra scenario có số người khác.
 
 Evaluator dùng các service `/bot_start_recording` (`bot_interfaces/srv/StartEvaluation`)

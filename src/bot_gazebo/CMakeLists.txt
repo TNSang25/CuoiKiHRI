@@ -95,4 +95,13 @@ install(DIRECTORY media/models
 # )
 
 ament_environment_hooks("${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/${PROJECT_NAME}.dsv.in")
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_gait_balance test/test_gait_balance.cpp)
+  target_compile_definitions(test_gait_balance PRIVATE
+    BOT_MODEL_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/media/models")
+  target_link_libraries(test_gait_balance ${GAZEBO_LIBRARIES})
+endif()
+
 ament_package()

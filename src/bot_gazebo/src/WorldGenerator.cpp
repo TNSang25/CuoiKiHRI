@@ -18,6 +18,7 @@
 /***********************************************************************/
 
 #include "bot_gazebo/WorldGenerator.hpp"
+#include "bot_gazebo/actor_motion.hpp"
 //#include <ament_index_cpp/get_package_prefix.hpp>
 //#include <ament_index_cpp/get_package_share_directory.hpp>
 
@@ -321,10 +322,6 @@ bool WorldGenerator::processXML()
   std::string skin_filename[] = { "elegant_man.dae", "casual_man.dae", "elegant_woman.dae", "regular_man.dae",
                                   "worker_man.dae",  "walk.dae",       "walk-green.dae",    "walk-blue.dae",
                                   "walk-red.dae",    "stand.dae" };
-  std::string animation_filename[] = { "07_01-walk.bvh",           "69_02_walk_forward.bvh",   "137_28-normal_wait.bvh",
-                                       "142_01-walk_childist.bvh", "07_04-slow_walk.bvh",      "02_01-walk.bvh",
-                                       "142_17-walk_scared.bvh",   "17_01-walk_with_anger.bvh" };
-
   // load the base world file
   tinyxml2::XMLDocument doc;
   const char* path = base_world_.c_str();
@@ -453,158 +450,50 @@ bool WorldGenerator::processXML()
       ignore->InsertAfterChild(pModels[i - 1], pModels[i]);
   }
 
-  // CREATE ACTORS
-  bool first = true;
-  for (auto a : agents_.agents)
+  // COLLADA clips share the same 31-joint rig as all bundled character skins.
+  // Mixing BVH rigs here makes Gazebo reuse incompatible retargeting aligners.
+  for (const auto &a : agents_.agents)
   {
-    tinyxml2::XMLElement* pNewActor = doc.NewElement("actor");
-    pNewActor->SetAttribute("name", a.name.c_str());
-
-    // pose format = "x y z r p y"
-    tinyxml2::XMLElement* pPose = doc.NewElement("pose");
-    std::string pose = std::to_string(a.position.position.x) + " " + std::to_string(a.position.position.y) + " " +
-                       std::to_string(a.position.position.z) + " 0 0 " + std::to_string(a.yaw);
-    pPose->SetText(pose.c_str());
-
-    tinyxml2::XMLElement* pSkin = doc.NewElement("skin");
-    tinyxml2::XMLElement* pFilename = doc.NewElement("filename");
-    pFilename->SetText(skin_filename[a.skin].c_str());
-    tinyxml2::XMLElement* pScale = doc.NewElement("scale");
-    pScale->SetText(1.0f);
-
-    // Set no_active animation
-    tinyxml2::XMLElement* pAnimation = doc.NewElement("animation");
-    pAnimation->SetAttribute("name", "no_active");
-
-    tinyxml2::XMLElement* pFilename1 = doc.NewElement("filename");
-
-    if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_REGULAR ||
-        a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SURPRISED ||
-        a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_THREATENING)
+    if (a.skin >= sizeof(skin_filename) / sizeof(skin_filename[0]))
     {
-      pFilename1->SetText(animation_filename[0].c_str());
+      RCLCPP_ERROR(get_logger(), "Invalid skin %u for agent %s", a.skin, a.name.c_str());
+      return false;
     }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_IMPASSIVE)
+    auto *world = doc.FirstChildElement("sdf")->FirstChildElement("world");
+    auto *actor = doc.NewElement("actor");
+    actor->SetAttribute("name", a.name.c_str());
+    world->InsertEndChild(actor);
+
+    const std::string pose = std::to_string(a.position.position.x) + " " +
+      std::to_string(a.position.position.y) + " " + std::to_string(actorHeight(a.skin)) +
+      " " + std::to_string(kActorRoll) + " 0 " + std::to_string(a.yaw + kActorYawOffset);
+    auto *pose_element = doc.NewElement("pose");
+    pose_element->SetText(pose.c_str());
+    actor->InsertEndChild(pose_element);
+    auto *skin = doc.NewElement("skin");
+    auto *skin_file = doc.NewElement("filename");
+    skin_file->SetText(skin_filename[a.skin].c_str());
+    skin->InsertEndChild(skin_file);
+    auto *skin_scale = doc.NewElement("scale");
+    skin_scale->SetText(1.0);
+    skin->InsertEndChild(skin_scale);
+    actor->InsertEndChild(skin);
+
+    for (const auto &clip : {std::make_pair("walking", "walk.dae"),
+                             std::make_pair("idle", "stand.dae")})
     {
-      pFilename1->SetText(animation_filename[1].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SCARED)
-    {
-      pFilename1->SetText(animation_filename[5].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_CURIOUS)
-    {
-      pFilename1->SetText(animation_filename[1].c_str());
-    }
-
-    tinyxml2::XMLElement* pScale1 = doc.NewElement("scale");
-    pScale1->SetText("1.0");
-    tinyxml2::XMLElement* pInterpolate = doc.NewElement("interpolate_x");
-    pInterpolate->SetText("true");
-
-    // Set active animation
-    tinyxml2::XMLElement* pAnimation1 = doc.NewElement("animation");
-    pAnimation1->SetAttribute("name", "active");
-
-    tinyxml2::XMLElement* pFilename2 = doc.NewElement("filename");
-
-    if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_REGULAR)
-    {
-      pFilename2->SetText(animation_filename[0].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_IMPASSIVE)
-    {
-      pFilename2->SetText(animation_filename[1].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SURPRISED)
-    {
-      pFilename2->SetText(animation_filename[2].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_THREATENING)
-    {
-      pFilename2->SetText(animation_filename[7].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_SCARED)
-    {
-      pFilename2->SetText(animation_filename[6].c_str());
-    }
-    else if (a.behavior.type == bot_interfaces::msg::AgentBehavior::BEH_CURIOUS)
-    {
-      pFilename2->SetText(animation_filename[4].c_str());
-    }
-
-    tinyxml2::XMLElement* pScale2 = doc.NewElement("scale");
-    pScale2->SetText("1.0");
-    tinyxml2::XMLElement* pInterpolate1 = doc.NewElement("interpolate_x");
-    pInterpolate1->SetText("true");
-
-    // Insert actor in the XML
-    if (first)
-    {
-      first = false;
-      tinyxml2::XMLElement* pInclude =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("physics");
-      doc.FirstChildElement("sdf")->FirstChildElement("world")->InsertAfterChild(pInclude, pNewActor);
-
-      tinyxml2::XMLElement* actors =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->FirstChildElement("actor");
-      actors->InsertFirstChild(pPose);
-      actors->InsertAfterChild(pPose, pSkin);
-      tinyxml2::XMLElement* skin =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->FirstChildElement("actor")->FirstChildElement(
-              "skin");
-      skin->InsertFirstChild(pFilename);
-      skin->InsertAfterChild(pFilename, pScale);
-
-      // Insert no_active animation
-      actors->InsertAfterChild(pSkin, pAnimation);
-      tinyxml2::XMLElement* animation =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->FirstChildElement("actor")->FirstChildElement(
-              "animation");
-      animation->InsertFirstChild(pFilename1);
-      animation->InsertAfterChild(pFilename1, pScale1);
-
-      // Insert active animation
-      actors->InsertAfterChild(animation, pAnimation1);
-      tinyxml2::XMLElement* animation_active =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->FirstChildElement("actor")->LastChildElement(
-              "animation");
-      animation_active->InsertFirstChild(pFilename2);
-      animation_active->InsertAfterChild(pFilename2, pScale2);
-      animation_active->InsertAfterChild(pScale2, pInterpolate1);
-    }
-    else
-    {
-      tinyxml2::XMLElement* pInclude =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("actor");
-      doc.FirstChildElement("sdf")->FirstChildElement("world")->InsertAfterChild(pInclude, pNewActor);
-
-      tinyxml2::XMLElement* actors =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("actor");
-      actors->InsertFirstChild(pPose);
-      actors->InsertAfterChild(pPose, pSkin);
-      tinyxml2::XMLElement* skin =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("actor")->FirstChildElement(
-              "skin");
-      skin->InsertFirstChild(pFilename);
-      skin->InsertAfterChild(pFilename, pScale);
-
-      // Insert no_active animation
-      actors->InsertAfterChild(pSkin, pAnimation);
-      tinyxml2::XMLElement* animation =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("actor")->FirstChildElement(
-              "animation");
-      animation->InsertFirstChild(pFilename1);
-      animation->InsertAfterChild(pFilename1, pScale1);
-
-      // Insert active animation
-      actors->InsertAfterChild(animation, pAnimation1);
-      tinyxml2::XMLElement* animation_active =
-          doc.FirstChildElement("sdf")->FirstChildElement("world")->LastChildElement("actor")->LastChildElement(
-              "animation");
-      animation_active->InsertFirstChild(pFilename2);
-      animation_active->InsertAfterChild(pFilename2, pScale2);
-      animation_active->InsertAfterChild(pScale2, pInterpolate1);
+      auto *animation = doc.NewElement("animation");
+      animation->SetAttribute("name", clip.first);
+      auto *filename = doc.NewElement("filename");
+      filename->SetText(clip.second);
+      animation->InsertEndChild(filename);
+      auto *scale = doc.NewElement("scale");
+      scale->SetText(1.0);
+      animation->InsertEndChild(scale);
+      auto *interpolate = doc.NewElement("interpolate_x");
+      interpolate->SetText(true);
+      animation->InsertEndChild(interpolate);
+      actor->InsertEndChild(animation);
     }
     if (plug_use_collision_)
     {
@@ -613,7 +502,10 @@ bool WorldGenerator::processXML()
       pNewModel->SetAttribute("name", (a.name + "_body").c_str());
     
       tinyxml2::XMLElement* modelPose = doc.NewElement("pose");
-      modelPose->SetText(pose.c_str());
+      const std::string collision_pose = std::to_string(a.position.position.x) + " " +
+        std::to_string(a.position.position.y) + " " + std::to_string(actorHeight(a.skin)) +
+        " 0 0 " + std::to_string(a.yaw);
+      modelPose->SetText(collision_pose.c_str());
       pNewModel->InsertEndChild(modelPose);
     
       tinyxml2::XMLElement* link = doc.NewElement("link");
