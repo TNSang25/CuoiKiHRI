@@ -1,0 +1,5 @@
+# agents and robot
+social_nav_msgs/Agents current_agents 
+social_nav_msgs/Agent robot
+---
+social_nav_msgs/Agents updated_agents

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>people_tracker</name>
+  <version>0.2.0</version>
+  <description>People perception for the navigation stack (C++): 2-D LiDAR leg detector with Kalman tracking, and a ground-truth adapter; both publish social_nav_msgs/People.</description>
+  <maintainer email="cuoikihri@example.com">CuoiKiHRI</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>social_nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>eigen</depend>
+  <exec_depend>rclpy</exec_depend>  <!-- scripts/tracker_eval.py -->
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

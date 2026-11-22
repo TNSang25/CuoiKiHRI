@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Build a Gazebo Classic TurtleBot 4 (standard) URDF from the official description.
+
+The official xacro (turtlebot4_description + irobot_create_description) targets Ignition
+Gazebo; its Classic branch needs iRobot plugins that are no longer released for Humble.
+This tool keeps the official links, joints, meshes and inertias, and replaces every
+simulator-specific block with standard gazebo_ros plugins:
+
+  * differential drive  -> /cmd_vel in, /odom + odom->base_link TF out (ground-truth odometry)
+  * RPLIDAR A1 ray      -> /scan (sensor_msgs/LaserScan, frame rplidar_link, 360 deg, 12 m)
+  * wheel joint states  -> /joint_states
+
+Usage (after `python3 scripts/prepare_deps.py`):
+  source scripts/env.bash
+  python3 src/tb4_classic_description/tools/make_turtlebot4_urdf.py
+"""
+import os
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
+
+OUTPUT = Path(__file__).resolve().parents[1] / 'urdf' / 'turtlebot4_classic.urdf'
+WHEEL_SEPARATION = 0.233
+WHEEL_DIAMETER = 0.0715
+
+GAZEBO_BLOCKS = f'''
+<robot>
+  <gazebo>
+    <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+      <update_rate>50</update_rate>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>{WHEEL_SEPARATION}</wheel_separation>
+      <wheel_diameter>{WHEEL_DIAMETER}</wheel_diameter>
+      <max_wheel_torque>20</max_wheel_torque>
+      <max_wheel_acceleration>2.0</max_wheel_acceleration>
+      <command_topic>cmd_vel</command_topic>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>false</publish_wheel_tf>
+      <odometry_topic>odom</odometry_topic>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <!-- 1 = world: odom coincides with the Gazebo world frame, which is also the map frame. -->
+      <odometry_source>1</odometry_source>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin name="wheel_states" filename="libgazebo_ros_joint_state_publisher.so">
+      <update_rate>30</update_rate>
+      <joint_name>left_wheel_joint</joint_name>
+      <joint_name>right_wheel_joint</joint_name>
+    </plugin>
+  </gazebo>
+  <gazebo reference="rplidar_link">
+    <sensor type="ray" name="rplidar">
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <update_rate>10</update_rate>
+      <ray>
+        <scan><horizontal>
+          <samples>720</samples><resolution>1</resolution>
+          <min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle>
+        </horizontal></scan>
+        <range><min>0.164</min><max>12.0</max><resolution>0.01</resolution></range>
+        <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
+      </ray>
+      <plugin name="rplidar" filename="libgazebo_ros_ray_sensor.so">
+        <ros><remapping>~/out:=scan</remapping></ros>
+        <output_type>sensor_msgs/LaserScan</output_type>
+        <frame_name>rplidar_link</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+  <gazebo reference="left_wheel"><mu1>1.0</mu1><mu2>1.0</mu2><kp>1e6</kp><kd>100</kd></gazebo>
+  <gazebo reference="right_wheel"><mu1>1.0</mu1><mu2>1.0</mu2><kp>1e6</kp><kd>100</kd></gazebo>
+  <gazebo reference="front_caster_link"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+</robot>
+'''
+
+
+def expand_official_xacro():
+    """Run the official xacro; stub the controller-config package the Classic branch looks up."""
+    with tempfile.TemporaryDirectory() as stub:
+        index = Path(stub) / 'share/ament_index/resource_index/packages'
+        index.mkdir(parents=True)
+        (index / 'irobot_create_control').touch()
+        (Path(stub) / 'share/irobot_create_control/config').mkdir(parents=True)
+        env = dict(os.environ, AMENT_PREFIX_PATH=f'{stub}:{os.environ.get("AMENT_PREFIX_PATH", "")}')
+        xacro_file = Path(get_package_share_directory('turtlebot4_description')) / 'urdf/standard/turtlebot4.urdf.xacro'
+        return subprocess.run(['xacro', str(xacro_file), 'gazebo:=classic'], env=env, check=True,
+                              capture_output=True, text=True).stdout
+
+
+def main():
+    robot = ET.fromstring(expand_official_xacro())
+    for tag in ('gazebo', 'ros2_control', 'transmission'):
+        for element in robot.findall(tag):
+            robot.remove(element)
+    for joint in robot.findall('joint'):
+        if joint.get('type') == 'prismatic':  # passive wheel-drop suspension: hold it at rest
+            joint.set('type', 'fixed')
+            for child in ('limit', 'axis', 'dynamics'):
+                for element in joint.findall(child):
+                    joint.remove(element)
+    for element in ET.fromstring(GAZEBO_BLOCKS):
+        robot.append(element)
+    ET.indent(robot)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text('<?xml version="1.0"?>\n<!-- Generated by tools/make_turtlebot4_urdf.py from '
+                      'turtlebot4_description (standard) for Gazebo Classic. Do not edit. -->\n'
+                      + ET.tostring(robot, encoding='unicode') + '\n')
+    print(OUTPUT)
+
+
+if __name__ == '__main__':
+    main()

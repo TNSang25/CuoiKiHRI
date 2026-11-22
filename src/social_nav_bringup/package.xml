@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>social_nav_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch for the social-navigation simulation (Gazebo, people, TurtleBot 4, Nav2, RViz) and the robot mission logger.</description>
+  <maintainer email="cuoikihri@example.com">CuoiKiHRI</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>social_nav_msgs</exec_depend>
+  <exec_depend>human_agents</exec_depend>
+  <exec_depend>human_gazebo</exec_depend>
+  <exec_depend>social_nav_levels</exec_depend>
+  <exec_depend>tb4_classic_description</exec_depend>
+  <exec_depend>people_tracker</exec_depend>
+  <exec_depend>social_nav_plugins</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

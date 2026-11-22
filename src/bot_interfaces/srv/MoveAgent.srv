@@ -1,6 +1,0 @@
-# agents and robot
-bot_interfaces/Agents current_agents 
-bot_interfaces/Agent robot
-int32 agent_id
----
-bot_interfaces/Agent updated_agent

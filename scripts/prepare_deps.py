@@ -11,7 +11,8 @@ debs.mkdir(parents=True, exist_ok=True)
 root.mkdir(parents=True, exist_ok=True)
 result = subprocess.run(
     ['apt-get', '-s', 'install', 'ros-humble-behaviortree-cpp',
-     'ros-humble-gazebo-ros-pkgs', 'libgazebo-dev'],
+     'ros-humble-gazebo-ros-pkgs', 'libgazebo-dev',
+     'ros-humble-turtlebot4-description', 'ros-humble-irobot-create-description'],
     check=True, text=True, capture_output=True)
 packages = [line.split()[1] for line in result.stdout.splitlines() if line.startswith('Inst ')]
 (deps / 'apt-packages.txt').write_text('\n'.join(packages) + '\n')
@@ -38,10 +39,10 @@ for source in Path('/usr/lib/x86_64-linux-gnu').glob('*.so*'):
 prefix = root / 'opt/ros/humble'
 if prefix.is_dir():
     (prefix / 'local_setup.bash').write_text("""#!/usr/bin/env bash
-_bot_dep_prefix="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-for _bot_dep_setup in "$_bot_dep_prefix"/share/*/local_setup.bash; do
-  [[ -f "$_bot_dep_setup" ]] && source "$_bot_dep_setup"
+_dep_prefix="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+for _dep_setup in "$_dep_prefix"/share/*/local_setup.bash; do
+  [[ -f "$_dep_setup" ]] && source "$_dep_setup"
 done
-unset _bot_dep_setup _bot_dep_prefix
+unset _dep_setup _dep_prefix
 """)
 print(f'Local dependencies ready: {root}')

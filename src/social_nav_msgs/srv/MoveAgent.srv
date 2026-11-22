@@ -1,0 +1,6 @@
+# agents and robot
+social_nav_msgs/Agents current_agents 
+social_nav_msgs/Agent robot
+int32 agent_id
+---
+social_nav_msgs/Agent updated_agent

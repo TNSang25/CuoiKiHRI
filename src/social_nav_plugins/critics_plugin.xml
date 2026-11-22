@@ -1,0 +1,13 @@
+<class_libraries>
+  <library path="social_critics">
+    <class type="mppi::critics::DynamicHumanCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>Penalises sampled trajectories that come close to people's constant-velocity predictions.</description>
+    </class>
+    <class type="mppi::critics::PassingSideCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>Commits early to a conventional passing side (keep right, pass behind crossing people).</description>
+    </class>
+    <class type="mppi::critics::SocialSpeedCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>Penalises speed above a limit that shrinks near people's predicted positions.</description>
+    </class>
+  </library>
+</class_libraries>

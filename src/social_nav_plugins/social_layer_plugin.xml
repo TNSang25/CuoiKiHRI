@@ -1,0 +1,7 @@
+<class_libraries>
+  <library path="social_layer">
+    <class type="social_nav_plugins::SocialLayer" base_class_type="nav2_costmap_2d::Layer">
+      <description>Velocity-aware asymmetric Gaussian personal space swept along each person's predicted path.</description>
+    </class>
+  </library>
+</class_libraries>

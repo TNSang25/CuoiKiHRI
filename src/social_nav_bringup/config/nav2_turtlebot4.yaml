@@ -1,0 +1,312 @@
+# Nav2 for the simulated TurtleBot 4 in the social-navigation levels.
+# Localisation is ground truth: Gazebo odometry (odometry_source=world) + identity map->odom,
+# so results measure navigation among people, not localisation drift.
+#
+# Method (social:=true, default): MPPI + social costmap layer + social critics.
+#   People come from /people (people_tracker: LiDAR leg tracker, or simulator ground truth).
+#   social_layer        velocity-aligned asymmetric Gaussian swept along p0 + v t,
+#                       lethal within 0.45 m of the person's current position.
+#   DynamicHumanCritic  per sampled trajectory: sum_t sum_people Gaussian(p_robot(t) - (p0 + v t)).
+#   SocialSpeedCritic   limits the approach speed towards nearby people.
+#   PassingSideCritic   commits early to a conventional passing side.
+# Baseline (social:=false): the launch file disables all of them; people are only lidar obstacles.
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 15.0          # period 0.0667 s <= model_dt (MPPI requirement)
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 20.0     # waiting for people to pass is allowed
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: true
+      xy_goal_tolerance: 0.3            # 0.25 made MPPI dither next to furniture
+      yaw_goal_tolerance: 3.14          # final heading does not matter
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 68                    # 68 x 0.0667 s = 4.5 s look-ahead
+      model_dt: 0.0667                  # = 1 / controller_frequency
+      batch_size: 2000                  # 1000 sampled too sparsely (inconsistent avoidance)
+      vx_std: 0.3                       # wider sampling for the higher speed limit
+      vy_std: 0.2
+      wz_std: 0.4
+      vx_max: 0.65                      # overridden by launch arg max_speed (real Create 3: 0.306 m/s)
+      vx_min: -0.15
+      vy_max: 0.0
+      wz_max: 1.5
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      reset_period: 1.0
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      critics: ["ConstraintCritic", "CostCritic", "DynamicHumanCritic", "SocialSpeedCritic",
+                "PassingSideCritic", "GoalCritic",
+                "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic",
+                "PreferForwardCritic"]
+      PassingSideCritic:
+        # Commit early to a conventional side: oncoming -> keep right (person on the robot's
+        # left), crossing -> pass behind, same direction -> overtake on the left. At the closest
+        # approach (if < pass_distance) the clearance c on that side costs
+        # cost_weight * clamp((pass_offset - c) / pass_offset, 0, 2): 1 head-on, 2 wrong side.
+        enabled: true
+        people_topic: /people
+        keep_side: "right"
+        cost_weight: 10.0
+        pass_distance: 2.0
+        pass_offset: 0.7              # 0.9 was unreachable in the 2.5 m corridor (robot hesitated)
+        min_speed: 0.2
+        max_distance: 6.0
+        max_age: 1.0
+      SocialSpeedCritic:
+        # Slow down when approaching people: the speed component towards each predicted person
+        # may not exceed a limit ramping from slow_speed at slow_distance to max_speed at
+        # free_distance; cost = w * sum_t sum_people max(0, v_towards - allowed)^2.
+        enabled: true
+        people_topic: /people
+        cost_power: 1
+        cost_weight: 10.0
+        slow_distance: 0.8
+        free_distance: 2.0
+        slow_speed: 0.15
+        max_speed: 0.65               # set from the launch arg max_speed
+        max_distance: 6.0
+        max_age: 1.0
+      DynamicHumanCritic:
+        enabled: true
+        people_topic: /people
+        cost_power: 1
+        cost_weight: 1.0               # tuned with CostCritic on level 1 (0.3 let it dash past people)
+        max_distance: 6.0             # ignore people farther than this from the robot [m]
+        max_age: 1.0                  # ignore /people older than this [s]
+        front_gain: 2.0               # sigma_front = max(front_gain * v, min_sigma)
+        min_sigma: 0.5
+        side_ratio: 0.6667            # sigma_side = 2/3 sigma_front
+        rear_ratio: 0.5               # sigma_rear = 1/2 sigma_front
+        still_speed: 0.1              # below this speed the Gaussian is isotropic
+        sigma_growth: 0.2             # sigmas widen 0.2 m per second of look-ahead (uncertainty)
+        decay_time: 3.0               # prediction t seconds ahead weighted by exp(-t / 3)
+        collision_distance: 0.6       # predicted collision: robot (0.175) + person (0.3) + margin
+        collision_weight: 30.0        # per step, NOT discounted with t: yield instead of cutting in
+        collision_horizon: 3.5        # predictions up to 3.5 s ahead count as collisions
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      # CostCritic scores the raw local-costmap value along each trajectory, so the social
+      # layer's soft Gaussian costs count as costs. (ObstaclesCritic converted every cost into an
+      # obstacle distance through the inflation formula, so a soft social cost of ~150 looked
+      # like a wall 0.3 m away and the robot over-reacted.) Lethal/inscribed is still collision.
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0              # Nav2 default 3.81 let path-tracking critics dominate
+        critical_cost: 300.0
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+        inflation_layer_name: "inflation_layer"
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 6.0                # 14 pinned the robot to the people-blind global path
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 3
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 7                        # holds the 4.5 s MPPI look-ahead
+      height: 7
+      resolution: 0.05
+      robot_radius: 0.175
+      always_send_full_costmap: true
+      plugins: ["obstacle_layer", "social_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.0
+      social_layer:
+        plugin: "social_nav_plugins::SocialLayer"
+        enabled: true
+        people_topic: /people
+        front_gain: 2.0
+        min_sigma: 0.5
+        side_ratio: 0.6667
+        rear_ratio: 0.5
+        still_speed: 0.1
+        sigma_growth: 0.2             # sigmas widen with look-ahead time (prediction uncertainty)
+        decay_time: 3.0               # weight exp(-t / decay_time) on the prediction at time t
+        prediction_horizon: 3.0       # sweep p0 + v t for t in [0, 3] s
+        prediction_step: 0.5
+        lethal_radius: 0.45           # lethal within 0.45 m of the current position
+        lethal_on_prediction: false   # true: also lethal around every predicted position
+        max_cost: 200.0               # Gaussian peak (252 froze the robot near people)
+        cutoff: 0.05
+        max_age: 1.0
+        robot_clear_radius: 0.45      # never lethal under/next to the robot itself
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.6
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      robot_radius: 0.175
+      resolution: 0.05
+      track_unknown_space: true
+      always_send_full_costmap: true
+      # social_layer is defined below but not used here: moving Gaussian costs in the global
+      # costmap made NavFn re-route every replanning cycle and the robot oscillate (ablation).
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.0
+      social_layer:
+        plugin: "social_nav_plugins::SocialLayer"
+        enabled: true
+        people_topic: /people
+        front_gain: 2.0
+        min_sigma: 0.5
+        side_ratio: 0.6667
+        rear_ratio: 0.5
+        still_speed: 0.1
+        sigma_growth: 0.2             # sigmas widen with look-ahead time (prediction uncertainty)
+        decay_time: 1.5               # weight exp(-t / decay_time) on the prediction at time t
+        prediction_horizon: 2.0       # sweep p0 + v t for t in [0, 2] s
+        prediction_step: 0.25
+        lethal_radius: 0.0            # global: soft costs only, so paths are never blocked
+                                      # (the lethal 0.45 m core lives in the local costmap)
+        lethal_on_prediction: false   # true: also lethal around every predicted position
+        max_cost: 252.0               # Gaussian peak, just below inscribed (253)
+        cutoff: 0.02
+        max_age: 1.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.6
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 5.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: true
+      allow_unknown: false
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>human_agents</name>
+  <version>0.1.0</version>
+  <description>Simulated people: scenario loader and Behavior Tree + Social Force Model controller.</description>
+  <maintainer email="cuoikihri@example.com">CuoiKiHRI</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>social_nav_msgs</depend>
+  <depend>social_force_model</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>behaviortree_cpp</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
